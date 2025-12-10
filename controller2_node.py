@@ -59,7 +59,7 @@ def main():
 
     # Here you’d construct the same CurrentReference you use in your app
     from current_reference.current_ref_gen import CurrentReference
-    currentReference = CurrentReference(i_ref_peak=10.0, f_ref=50.0, per_unit=False)
+    currentReference = CurrentReference(i_ref_peak=10.0, i_ref_freq=50.0, per_unit=False)
 
     u_prev = None
 

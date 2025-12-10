@@ -3,6 +3,7 @@ import zmq
 import numpy as np
 from comm_schema import make_envelope
 from acdcac.fsclf import FiniteStepLyapunov
+import matplotlib.pyplot as plt
 
 
 def main():
@@ -40,6 +41,16 @@ def main():
     # initial neighbor trajectories
     i_l_bar = [i_l] * N
     x1_bar = [{"i_g": i_g, "v_dc": v_dc}] * N
+
+    # ----------------------------------------------------------------------
+    # LOGGING BUFFERS (NEW)
+    # ----------------------------------------------------------------------
+    t_log = []
+    i_g_log = []
+    v_dc_log = []
+    i_l_log = []
+    u1_log = []
+    u2_log = []
 
     print("[Coordinator] Started.")
     for outer_step in range(outer_steps):
@@ -226,19 +237,102 @@ def main():
             }
             sock_p2.send_json(ack_p2)
 
-            # here you’d log (step, t_sim, i_g, v_dc, i_l, u1, u2, etc.)
+            ## here you’d log (step, t_sim, i_g, v_dc, i_l, u1, u2, etc.) ##
             print(
                 f"[Coordinator] step={step} t={t_sim:.6f} "
                 f"i_g={i_g:.3f} v_dc={v_dc:.2f} i_l={i_l:.3f}"
             )
+            # Logging
+            t_log.append(t_sim)
+            i_g_log.append(i_g)
+            v_dc_log.append(v_dc)
+            i_l_log.append(i_l)
+            u1_log.append(u1)
+            u2_log.append(u2)
 
+            # increment time
             step += 1
             t_sim = step * Ts
 
     print("[Coordinator] Simulation finished.")
 
-    # (Optional) you can now wait for final 'hello' from each node and send a
-    # 'shutdown' message if you want to terminate them cleanly.
+    # ------------------------------------------------------------------
+    # CLEAN SHUTDOWN HANDSHAKE
+    # Each node will, after the last ACK, go back to the top of its loop
+    # and send another "hello_from". Here we receive that hello and reply
+    # with a 'shutdown' message. Nodes then break and terminate.
+    # ------------------------------------------------------------------
+
+    shutdown_payload = {}  # not used by nodes; msg_type is enough
+
+    def send_shutdown(sock, receiver_name):
+        hello = sock.recv_json()  # wait for final hello_from
+        # print(f"[Coordinator] Final hello from {receiver_name}:", hello)
+        msg_shutdown = make_envelope(
+            msg_type="shutdown",
+            sim_id=sim_id,
+            sender="coordinator",
+            receiver=receiver_name,
+            step=step,
+            outer_step=outer_step,
+            Ts=Ts,
+            M=M,
+            payload=shutdown_payload,
+        )
+        sock.send_json(msg_shutdown)
+
+    # order not critical, just do all four
+    send_shutdown(sock_c1, "sub1")
+    send_shutdown(sock_c2, "sub2")
+    send_shutdown(sock_p1, "plant1")
+    send_shutdown(sock_p2, "plant2")
+
+    # close sockets and context
+    sock_p1.close()
+    sock_p2.close()
+    sock_c1.close()
+    sock_c2.close()
+    context.term()
+
+    # ------------------------------------------------------------------
+    # PLOTTING
+    # ------------------------------------------------------------------
+    if t_log:
+        # Voltage plot
+        plt.figure()
+        plt.title("DC-link voltage v_dc")
+        plt.plot(t_log, v_dc_log, label="v_dc")
+        plt.xlabel("Time [s]")
+        plt.ylabel("Voltage [V]")
+        plt.grid(True)
+        plt.legend()
+
+        # Currents plot
+        plt.figure()
+        plt.title("Currents i_g and i_l")
+        plt.plot(t_log, i_g_log, label="i_g")
+        plt.plot(t_log, i_l_log, label="i_l")
+        plt.xlabel("Time [s]")
+        plt.ylabel("Current [A]")
+        plt.grid(True)
+        plt.legend()
+
+        plt.show()
+
+    # ------------------------------------------------------------------
+    # RETURN "SIMULATION FINISHED" RESULT
+    # ------------------------------------------------------------------
+    sim_result = {
+        "status": "finished",
+        "n_steps": len(t_log),
+        "t_final": t_log[-1] if t_log else 0.0,
+        "i_g_final": i_g,
+        "v_dc_final": v_dc,
+        "i_l_final": i_l,
+    }
+
+    print("Coordinator: simulation result:", sim_result)
+    return sim_result
 
 
 if __name__ == "__main__":

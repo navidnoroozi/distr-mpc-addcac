@@ -13,7 +13,7 @@ def main():
     # *** SET YOUR COORDINATOR IP HERE ***
     # Use "127.0.0.1" if coordinator runs on the same PC.
     # Use the LAN IP of PC1 (e.g. "192.168.0.10") if this runs on another PC.
-    coordinator_ip = "192.168.0.10"
+    coordinator_ip = "127.0.0.1"
     addr = f"tcp://{coordinator_ip}:5553"
     print(f"[C1] Connecting to coordinator at {addr}")
     sock.connect(addr)
