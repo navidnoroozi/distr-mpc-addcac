@@ -2,7 +2,7 @@
 import math
 
 class PWM:
-    def __init__(self, carrier_freq, Ts, Vdc, per_unit: bool=False):
+    def __init__(self, carrier_freq, Ts, Vdc, tech_type: str = 'HB', per_unit: bool=False):
         """
         Triangular-carrier PWM for a single leg (bipolar ±Vdc).
         carrier_freq: Hz
@@ -14,6 +14,7 @@ class PWM:
         self.Ts = float(Ts)
         self.Vdc = float(Vdc)
         self.per_unit = bool(per_unit)
+        self.tech_type = tech_type
 
     def _triangle_01(self, t):
         """Triangle in [0,1] with period 1/fc."""

@@ -1,5 +1,5 @@
 # coordinator.py
-import zmq
+import zmq, math
 import numpy as np
 from comm_schema import make_envelope
 from acdcac.fsclf import FiniteStepLyapunov
@@ -30,13 +30,16 @@ def main():
     total_steps = int(sim_time / Ts)
     outer_steps = total_steps // M
 
+    # Grid / DC Source Voltage
+    V_rms_req = 230.0  # RMS voltage in V
+    V_dc = V_rms_req * math.sqrt(2)  # V
     # global state x = (i_g, v_dc, i_l)
-    i_g, v_dc, i_l = 0.0, 400.0, 0.0
+    i_g, v_dc, i_l = 0.0, V_dc, 0.0
     step = 0
     outer_step = 0
     t_sim = 0.0
 
-    fsclf = FiniteStepLyapunov(x_eq=[0.0, 400.0, 0.0])
+    fsclf = FiniteStepLyapunov(x_eq=[0.0, 230.0, 0.0])
 
     # initial neighbor trajectories
     i_l_bar = [i_l] * N

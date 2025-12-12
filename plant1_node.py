@@ -1,16 +1,16 @@
 # plant1_node.py
-import zmq
+import zmq, math
 from typing import Tuple
 from comm_schema import make_envelope
+from gridDClink.grid_dc_link_dyn_cal import GridDCLink
 
 def f1_discrete(x1, x2, u1, Ts):
     """
-    Toy discrete-time model for Subsystem 1: x1 = [i_g, v_dc].
-    Replace with your actual rectifier+dc-link discrete model.
+    Discrete-time model for Subsystem 1: x1 = [i_g, v_dc].
 
-    Example: Euler of some continuous dynamics with coupling to x2.
-        i_g+  = i_g + Ts * (-a*i_g + b*(v_dc - k*x2 + u1))
-        v_dc+ = v_dc + Ts * (c*i_g - d*x2)
+    Euler of some continuous dynamics with coupling to x2.
+            di_g/dt = (-Rg * i_g + v_g - v_gr_ctrl) / Lg
+            dv_dc/dt = (i_g - i_l) / Cdc
     """
     i_g, v_dc = x1
     i_l = x2[0]
@@ -34,8 +34,25 @@ def main():
     print(f"[Plant1] Connecting to coordinator at {addr}")
     sock.connect(addr)
 
+    ## Simulation parameters
+    # Carrier frequency
+    carrier_freq = 1e4 # in kHz
+    # Overall sampling time
+    sampling_time = 1/carrier_freq
+    # Grid frequency in Hz
+    f_grid = 50.0
+    # Grid / DC Source Voltage
+    V_rms_req = 230.0  # RMS voltage in V
+    V_dc = V_rms_req * math.sqrt(2)  # V
+
+    # Grid + DC Link parameters
+    Lg=10e-3
+    Rg=10.0
+    Cdc=5e-3
+    griddclink = GridDCLink(sampling_time, Rg, Lg, Cdc, V_dc, f_grid, per_unit=False)
+
     # Local state
-    x1 = (0.0, 400.0)
+    x1 = (0.0, V_dc)  # i_g, v_dc
     Ts = 1e-4   # just to have it locally
 
     print("[Plant1] Started.")
@@ -60,7 +77,8 @@ def main():
         x2 = payload["x2"]           # neighbor state, e.g. {"i_l": ...}
 
         x2_vec = (x2["i_l"],)
-        x1_next = f1_discrete(x1, x2_vec, u1, Ts)
+        # x1_next = f1_discrete(x1, x2_vec, u1, Ts)
+        x1_next = griddclink.step_euler(x1, x2_vec, u1, step*Ts, Ts)
         x1 = x1_next
 
         reply_payload = {

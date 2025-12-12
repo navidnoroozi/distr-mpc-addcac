@@ -16,14 +16,14 @@ def make_envelope(
 ) -> Dict[str, Any]:
     return {
         "msg_type": msg_type,   # "plant_to_controller", "controller_to_plant", ...
-        "version": version,
-        "sim_id": sim_id,
-        "sender": sender,
-        "receiver": receiver,
-        "timestamp_wall": time.time(),
-        "step": int(step),
-        "outer_step": int(outer_step),
-        "Ts": float(Ts),
-        "M": int(M),
-        "payload": payload,
+        "version": version,     # protocol version
+        "sim_id": sim_id,       # simulation identifier
+        "sender": sender,       # sender identifier, "sub1", "sub2", "plant"
+        "receiver": receiver,   # receiver identifier, "sub1", "sub2", "plant"
+        "timestamp_wall": time.time(),  # wall-clock time
+        "step": int(step),              # plain sample index in plant time (i.e. step = outer_step * M at update instants)
+        "outer_step": int(outer_step),  # index of the multi-step update k (where t=kMTs ​ )
+        "Ts": float(Ts),                # sampling time [s]
+        "M": int(M),                    # multi-step length
+        "payload": payload,             # message-specific content
     }
