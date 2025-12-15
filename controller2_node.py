@@ -1,8 +1,6 @@
 # controller2_node.py
 import zmq, math
 import numpy as np
-from scipy.optimize import minimize
-
 from comm_schema import make_envelope
 from acdcac.fsclf import FiniteStepLyapunov
 from current_reference.current_ref_gen import CurrentReference
@@ -11,44 +9,6 @@ from cost_fun.cost_func_calc import CostFunction
 from pwm.pwm_gen import PWM
 from load.load_dyn_cal import Load
 from power_current_conv.power_current_handler import RequiredPowerCurrentHandler
-
-# def solve_local_ocp_sub2(x2, x1_bar, N, M, V0, Ts, u_prev, fsclf, currentReference, t0):
-#     """
-#     Local OCP-2 for Subsystem 2.
-#     Placeholder: track i_l_ref, penalize CLF, input.
-#     """
-#     if u_prev is None:
-#         u_prev = np.zeros(N)
-#     u_prev = np.asarray(u_prev, dtype=float)
-
-#     def cost(u_seq):
-#         u_seq = np.asarray(u_seq, dtype=float)
-#         i_l = x2[0]
-#         t = t0
-#         J = 0.0
-#         for k in range(N):
-#             u_k = u_seq[k]
-#             i_l_ref = currentReference.generateRefTrajectory(t)[0]
-#             J += (i_l - i_l_ref)**2 + 1e-2 * u_k**2 + 1e-1 * (u_k - u_prev[k])**2
-#             t += Ts
-#         x2_pred = [x2] * N
-#         V0_sub = fsclf.V_sub2(x2)
-#         V_M_sub = fsclf.V_sub2(x2_pred[min(M-1, N-1)])
-#         return J, x2_pred, V0_sub, V_M_sub
-
-#     def obj(u_seq):
-#         J, _, _, _ = cost(u_seq)
-#         return J
-
-#     u0 = u_prev.copy()
-#     bounds = [(-1, 1)] * N
-#     res = minimize(obj, u0, method="trust-constr", bounds=bounds)
-#     if not res.success:
-#         u_opt = u_prev
-#     else:
-#         u_opt = res.x
-#     J, x2_pred, V0_sub, V_M_sub = cost(u_opt)
-#     return u_opt, x2_pred, J, V0_sub, V_M_sub
 
 def main():
     context = zmq.Context()
@@ -64,11 +24,7 @@ def main():
 
     print("[C2] Socket type:", sock.getsockopt(zmq.TYPE))  # should be 3 (REQ)
 
-    fsclf = FiniteStepLyapunov(x_eq=[0.0, 400.0, 0.0])
-
-    # Here you’d construct the same CurrentReference you use in your app
-    from current_reference.current_ref_gen import CurrentReference
-    currentReference = CurrentReference(i_ref_peak=10.0, i_ref_freq=50.0, per_unit=False)
+    # fsclf = FiniteStepLyapunov(x_eq=[0.0, 400.0, 0.0])
 
     ## Simulation parameters
     # Carrier frequency
@@ -130,8 +86,6 @@ def main():
 
         x2 = payload["state"]["i_l"]
         i_g, v_dc = (payload["state"]["i_g"], payload["state"]["v_dc"])
-        # i_g_bar = np.array(payload["neighbor_prediction"]["i_g_bar"], dtype=float)
-        # v_dc_bar = np.array(payload["neighbor_prediction"]["v_dc_bar"], dtype=float)
         x1_bar_dicts = payload["neighbor_prediction"]["x1_bar"]
         x1_bar = [(d["i_g"], d["v_dc"]) for d in x1_bar_dicts]
         i_g_bar, v_dc_bar = x1_bar
@@ -154,7 +108,7 @@ def main():
         # N = payload["horizon_N"]
 
         # ---------------------------------------------------------
-        # 3) Solve local OCP (placeholder)
+        # 3) Solve local OCP
         # ---------------------------------------------------------
 
         if u_prev is None:
@@ -162,33 +116,29 @@ def main():
 
         current_time = step * M * Ts
         # Solve MPC (averaged model inside)
-        print("[C1] Starting local optimization ...")
+        print("[C2] Starting local optimization ...")
         u_opt, J2 = solver.solveMPC(pwm_load, load, referenceTrajectory, 
                                    t_0=current_time, x_0=x2, x_N_bar=x1_bar, cont_horizon=N, u0=u_prev, subsystem='load')
 
-        _, x2_pred, i_l_ref = cost_func.calculateCostFuncGrid(x2, x1_bar, current_time, u_prev, N, 
+        _, x2_pred, i_l_ref = cost_func.calculateCostFuncLoad(x2, x1_bar, current_time, u_prev, N, 
                                                            u_opt, pwm_load, load, referenceTrajectory)
         i_l_0 = x2
         i_l_pre = x2_pred
         i_l_ref_0 = referenceTrajectory.generateRefTrajectory(current_time)[0]
         V0_sub = stage_func(i_l_0, i_l_ref_0)
         V_M_sub = stage_func(i_l_pre[-1], i_l_ref[-1])
-
-        # u_opt, x2_pred, J2, V0_sub, V_M_sub = solve_local_ocp_sub2(
-        #     x2, x1_bar, N, M, V0, Ts, u_prev, fsclf, currentReference, t0
-        # )
         u_prev = u_opt
 
         reply_payload = {
             "status": "ok",
             "local_cost": float(J2),
             "u_seq": u_opt.tolist(),
-            "i_l_pred": [float(xx[0]) for xx in x2_pred],
+            "i_l_pred": [float(xx) for xx in x2_pred],
             "contractive": {
                 "V0_sub": float(V0_sub),
                 "V_M_sub": float(V_M_sub),
                 "alpha": payload["fsclf"]["alpha"],
-                "satisfied": V_M_sub <= payload["fsclf"]["alpha"] * V0_sub,
+                "satisfied": bool(V_M_sub <= payload["fsclf"]["alpha"] * V0_sub),
             },
         }
         reply = make_envelope(

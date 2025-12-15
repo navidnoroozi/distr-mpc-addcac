@@ -1,8 +1,6 @@
 # controller1_node.py
 import zmq, math
 import numpy as np
-from scipy.optimize import minimize
-
 from comm_schema import make_envelope
 from acdcac.fsclf import FiniteStepLyapunov
 from current_reference.current_ref_gen import CurrentReference
@@ -95,7 +93,7 @@ def main():
         print(f"[C1] i_l_bar={i_l_bar}")
 
         # ---------------------------------------------------------
-        # 3) Solve local OCP (placeholder)
+        # 3) Solve local OCP
         # ---------------------------------------------------------
         if u_prev is None:
             u_prev = np.zeros(N)
@@ -106,33 +104,6 @@ def main():
         u_opt, J1 = solver.solveMPC(pwm_grid, griddclink, referenceTrajectory, 
                                    t_0=current_time, x_0=x1, x_N_bar=i_l_bar, cont_horizon=N, u0=u_prev, subsystem='grid')
 
-        # # From Chatgpt
-        # def cost(u_seq):
-        #     u_seq = np.asarray(u_seq, dtype=float)
-        #     i_g, v_dc = x1
-        #     J = 0.0
-        #     for k in range(N):
-        #         u_k = u_seq[k]
-        #         V1 = fsclf.V_sub1((i_g, v_dc))
-        #         J += V1 + 1e-2 * u_k**2 + 1e-1 * (u_k - u_prev[k])**2
-        #     x1_pred = [x1] * N
-        #     V0_sub = fsclf.V_sub1(x1)
-        #     V_M_sub = fsclf.V_sub1(x1_pred[min(M-1, N-1)])
-        #     return J, x1_pred, V0_sub, V_M_sub
-
-        # def obj(u_seq):
-        #     J, _, _, _ = cost(u_seq)
-        #     return J
-
-        # u0 = u_prev.copy()
-        # bounds = [(-1, 1)] * N
-
-        # res = minimize(obj, u0, method="trust-constr", bounds=bounds)
-        # if not res.success:
-        #     print("[C1] Warning: solver did not converge:", res.message)
-        #     u_opt = u_prev
-        # else:
-        #     u_opt = res.x
 
         _, x1_pred, i_g_ref = cost_func.calculateCostFuncGrid(x1, i_l_bar, current_time, u_prev, N, 
                                                            u_opt, pwm_grid, griddclink, referenceTrajectory)
@@ -141,7 +112,6 @@ def main():
         i_g_ref_0 = referenceTrajectory.generateRefTrajectory(current_time)[0]
         V0_sub = stage_func(i_g_0, i_g_ref_0, v_dc_0, V_dc)
         V_M_sub = stage_func(i_g_pre[-1], i_g_ref[-1], v_dc_pre[-1], V_dc)
-        # J1, x1_pred, V0_sub, V_M_sub = cost(u_opt)
         u_prev = u_opt
 
         print(f"[C1] Local cost J1={J1}, V0_sub={V0_sub}, V_M_sub={V_M_sub}")
@@ -157,7 +127,7 @@ def main():
                 "V0_sub": float(V0_sub),
                 "V_M_sub": float(V_M_sub),
                 "alpha": payload["fsclf"]["alpha"],
-                "satisfied": V_M_sub <= payload["fsclf"]["alpha"] * V0_sub,
+                "satisfied": bool(V_M_sub <= payload["fsclf"]["alpha"] * V0_sub),
             },
         }
 

@@ -7,7 +7,7 @@ class CostFunction:
             self.stage_func_grid = stage_func
             self.V_dc_ref = subsystem['V_dc_ref']
 
-    def calculateCostFuncLoad(self, x_l_0, t_0, u0, cont_horizon, u_seq, pwm, load, referenceTrajectory):
+    def calculateCostFuncLoad(self, x_l_0, x_g_bar, t_0, u0, cont_horizon, u_seq, pwm, load, referenceTrajectory):
         """
         IMPORTANT CHANGE:
         Use the *averaged* model for prediction inside the cost (MPC prediction model).
@@ -32,7 +32,7 @@ class CostFunction:
             # Stage cost with current reference at each step
             i_l_pred.append(x_l_pred)
             i_l_ref.append(referenceTrajectory.generateRefTrajectory(t)[0])
-            cost_func += float(self.stage_func(i_l_pred[k], i_l_ref[k]))
+            cost_func += float(self.stage_func_load(i_l_pred[k], i_l_ref[k]))
 
         return cost_func, i_l_pred, i_l_ref
 
