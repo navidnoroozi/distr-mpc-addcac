@@ -2,7 +2,6 @@
 import zmq, math
 import numpy as np
 from comm_schema import make_envelope
-from acdcac.fsclf import FiniteStepLyapunov
 from current_reference.current_ref_gen import CurrentReference
 from mpc_contr.mpc_contr_calc import MPCSSolver
 from cost_fun.cost_func_calc import CostFunction
@@ -93,7 +92,7 @@ def main():
         print(f"[C1] i_l_bar={i_l_bar}")
 
         # ---------------------------------------------------------
-        # 3) Solve local OCP
+        # 3) Solve local OCP for sub1
         # ---------------------------------------------------------
         if u_prev is None:
             u_prev = np.zeros(N)
@@ -150,7 +149,6 @@ def main():
         # 5) Wait for ACK to complete REQ/REP cycle
         ack = sock.recv_json()
         print("[C1] Received ACK from coordinator:", ack)
-
 
 if __name__ == "__main__":
     main()

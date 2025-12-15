@@ -9,12 +9,9 @@ import matplotlib.pyplot as plt
 def main():
     context = zmq.Context()
 
-    # REP sockets for the four nodes (Plant1, Plant2, Controller1, Controller2)
-    sock_p1 = context.socket(zmq.REP)
-    sock_p1.bind("tcp://*:5551")
-
-    sock_p2 = context.socket(zmq.REP)
-    sock_p2.bind("tcp://*:5552")
+    # REP sockets for the four nodes (Plant, Controller1, Controller2)
+    sock_p = context.socket(zmq.REP)
+    sock_p.bind("tcp://*:5551")
 
     sock_c1 = context.socket(zmq.REP)
     sock_c1.bind("tcp://*:5553")
@@ -34,19 +31,20 @@ def main():
     V_rms_req = 230.0  # RMS voltage in V
     V_dc = V_rms_req * math.sqrt(2)  # V
     # global state x = (i_g, v_dc, i_l)
+    # initial conditions
     i_g, v_dc, i_l = 0.0, V_dc, 0.0
     step = 0
     outer_step = 0
     t_sim = 0.0
 
-    fsclf = FiniteStepLyapunov(x_eq=[0.0, 230.0, 0.0])
+    fsclf = FiniteStepLyapunov(x_eq=[0.0, 230.0*math.sqrt(2), 0.0])
 
     # initial neighbor trajectories
     i_l_bar = [i_l] * N
     x1_bar = [{"i_g": i_g, "v_dc": v_dc}] * N
 
     # ----------------------------------------------------------------------
-    # LOGGING BUFFERS (NEW)
+    # LOGGING BUFFERS
     # ----------------------------------------------------------------------
     t_log = []
     i_g_log = []
@@ -66,7 +64,7 @@ def main():
         # ------------------------------------------------------------------
         hello_c1 = sock_c1.recv_json()
         # you can inspect hello_c1 if you like:
-        # print("[Coordinator] C1 hello:", hello_c1)
+        print("[Coordinator] C1 hello:", hello_c1)
 
         payload_c1 = {
             "state": {"i_g": i_g, "v_dc": v_dc, "i_l": i_l},
@@ -114,7 +112,7 @@ def main():
         # Pattern: recv(hello) -> send(job) -> recv(reply) -> send(ack)
         # ------------------------------------------------------------------
         hello_c2 = sock_c2.recv_json()
-        # print("[Coordinator] C2 hello:", hello_c2)
+        print("[Coordinator] C2 hello:", hello_c2)
 
         payload_c2 = {
             "state": {"i_g": i_g, "v_dc": v_dc, "i_l": i_l},
@@ -158,87 +156,52 @@ def main():
 
         # ------------------------------------------------------------------
         # --- APPLY FIRST M STEPS TO PLANTS --------------------------------
-        # For each inner step m, we handshake with Plant1 and Plant2:
+        # For each inner step m, we handshake with Plant:
         # REP side: recv(hello) -> send(job) -> recv(reply) -> send(ack)
         # ------------------------------------------------------------------
         for m in range(M):
             u1 = float(u1_seq[m])
             u2 = float(u2_seq[m])
 
-            # ---- Plant 1 step ----
-            hello_p1 = sock_p1.recv_json()
-            # print("[Coordinator] P1 hello:", hello_p1)
+            # ---- Plant step ----
+            hello_p = sock_p.recv_json()
+            print("[Coordinator] P hello:", hello_p)
 
-            payload_p1 = {
+            payload_p = {
                 "u1": u1,
-                "x2": {"i_l": i_l},
-            }
-            msg_p1 = make_envelope(
-                msg_type="coord_to_plant1",
-                sim_id=sim_id,
-                sender="coordinator",
-                receiver="plant1",
-                step=step,
-                outer_step=outer_step,
-                Ts=Ts,
-                M=M,
-                payload=payload_p1,
-            )
-            # send job to Plant 1
-            sock_p1.send_json(msg_p1)
-
-            # receive updated x1 from Plant 1
-            rep_p1 = sock_p1.recv_json()
-            i_g = rep_p1["payload"]["x1_next"]["i_g"]
-            v_dc = rep_p1["payload"]["x1_next"]["v_dc"]
-
-            # send ACK to complete REP cycle
-            ack_p1 = {
-                "msg_type": "ack",
-                "sim_id": sim_id,
-                "sender": "coordinator",
-                "receiver": "plant1",
-                "step": step,
-                "outer_step": outer_step,
-            }
-            sock_p1.send_json(ack_p1)
-
-            # ---- Plant 2 step ----
-            hello_p2 = sock_p2.recv_json()
-            # print("[Coordinator] P2 hello:", hello_p2)
-
-            payload_p2 = {
                 "u2": u2,
-                "x1": {"i_g": i_g, "v_dc": v_dc},
+                # "x2": {"i_l": i_l},
             }
-            msg_p2 = make_envelope(
-                msg_type="coord_to_plant2",
+            msg_p = make_envelope(
+                msg_type="coord_to_plant",
                 sim_id=sim_id,
                 sender="coordinator",
-                receiver="plant2",
+                receiver="plant",
                 step=step,
                 outer_step=outer_step,
                 Ts=Ts,
                 M=M,
-                payload=payload_p2,
+                payload=payload_p,
             )
-            # send job to Plant 2
-            sock_p2.send_json(msg_p2)
+            # send job to Plant
+            sock_p.send_json(msg_p)
 
-            # receive updated x2 from Plant 2
-            rep_p2 = sock_p2.recv_json()
-            i_l = rep_p2["payload"]["x2_next"]["i_l"]
+            # receive updated x1 and x2 from Plant
+            rep_p = sock_p.recv_json()
+            i_g = rep_p["payload"]["x1_next"]["i_g"]
+            v_dc = rep_p["payload"]["x1_next"]["v_dc"]
+            i_l = rep_p["payload"]["x2_next"]["i_l"]
 
             # send ACK to complete REP cycle
-            ack_p2 = {
+            ack_p = {
                 "msg_type": "ack",
                 "sim_id": sim_id,
                 "sender": "coordinator",
-                "receiver": "plant2",
+                "receiver": "plant",
                 "step": step,
                 "outer_step": outer_step,
             }
-            sock_p2.send_json(ack_p2)
+            sock_p.send_json(ack_p)
 
             ## here you’d log (step, t_sim, i_g, v_dc, i_l, u1, u2, etc.) ##
             print(
@@ -287,12 +250,10 @@ def main():
     # order not critical, just do all four
     send_shutdown(sock_c1, "sub1")
     send_shutdown(sock_c2, "sub2")
-    send_shutdown(sock_p1, "plant1")
-    send_shutdown(sock_p2, "plant2")
+    send_shutdown(sock_p, "plant")
 
     # close sockets and context
-    sock_p1.close()
-    sock_p2.close()
+    sock_p.close()
     sock_c1.close()
     sock_c2.close()
     context.term()

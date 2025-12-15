@@ -2,7 +2,6 @@
 import zmq, math
 import numpy as np
 from comm_schema import make_envelope
-from acdcac.fsclf import FiniteStepLyapunov
 from current_reference.current_ref_gen import CurrentReference
 from mpc_contr.mpc_contr_calc import MPCSSolver
 from cost_fun.cost_func_calc import CostFunction
@@ -24,8 +23,6 @@ def main():
 
     print("[C2] Socket type:", sock.getsockopt(zmq.TYPE))  # should be 3 (REQ)
 
-    # fsclf = FiniteStepLyapunov(x_eq=[0.0, 400.0, 0.0])
-
     ## Simulation parameters
     # Carrier frequency
     carrier_freq = 1e4 # in kHz
@@ -43,8 +40,8 @@ def main():
     i_ref_peak, _ = powerCurrentHandler.calculateCurrentMagnitudeAndPhase()
 
     # Load parameters
-    Ll=10e-3
-    Rl=10.0
+    Ll=5e-3
+    Rl=5.0
     back_emf_peak = 0
     load = Load(sampling_time, Rl, Ll, back_emf_peak, f_load, per_unit=False)
     
@@ -97,18 +94,8 @@ def main():
         print(f"[C2] i_g_bar={i_g_bar}")
         print(f"[C2] v_dc_bar={v_dc_bar}")
 
-        # t0 = payload["t_sim"]
-        # i_g = payload["state"]["i_g"]
-        # v_dc = payload["state"]["v_dc"]
-        # i_l = payload["state"]["i_l"]
-        # x2 = (i_l,)
-        # x1_bar_dicts = payload["neighbor_prediction"]["x1_bar"]
-        # x1_bar = [(d["i_g"], d["v_dc"]) for d in x1_bar_dicts]
-        # V0 = payload["fsclf"]["V0"]
-        # N = payload["horizon_N"]
-
         # ---------------------------------------------------------
-        # 3) Solve local OCP
+        # 3) Solve local OCP for sub2
         # ---------------------------------------------------------
 
         if u_prev is None:
