@@ -37,7 +37,7 @@ def main():
     P_req = 3e3  # Active power in W
     Q_req = 0.0    # Reactive power in VAR
     powerCurrentHandler = RequiredPowerCurrentHandler(P_req, Q_req, V_rms_req)
-    i_ref_peak, _ = powerCurrentHandler.calculateCurrentMagnitudeAndPhase()
+    i_ref_peak, phi_req = powerCurrentHandler.calculateCurrentMagnitudeAndPhase()
 
     # Grid + DC Link parameters
     Lg=10e-3
@@ -46,7 +46,7 @@ def main():
     griddclink = GridDCLink(sampling_time, Rg, Lg, Cdc, V_dc, f_grid, per_unit=False)
     
     # PWM and Current Reference objects
-    referenceTrajectory = CurrentReference(i_ref_peak, f_grid, per_unit=False)
+    referenceTrajectory = CurrentReference(i_ref_peak, f_grid, phi=phi_req, use_cos=True, per_unit=False)
     pwm_grid = PWM(carrier_freq, sampling_time, V_dc, tech_type = 'FB', per_unit=False)
     
     # stage cost
@@ -97,7 +97,7 @@ def main():
         if u_prev is None:
             u_prev = np.zeros(N)
 
-        current_time = step * M * Ts
+        current_time = payload.get("t_sim", step * Ts)
         # Solve MPC (averaged model inside)
         print("[C1] Starting local optimization ...")
         u_opt, J1 = solver.solveMPC(pwm_grid, griddclink, referenceTrajectory, 

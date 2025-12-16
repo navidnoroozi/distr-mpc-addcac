@@ -1,9 +1,9 @@
 # plant_node.py
 import zmq, math
-from typing import Tuple
 from comm_schema import make_envelope
 from gridDClink.grid_dc_link_dyn_cal import GridDCLink
 from load.load_dyn_cal import Load
+from pwm.pwm_gen import PWM
 
 def main():
     context = zmq.Context()
@@ -13,72 +13,100 @@ def main():
     # If Plant runs on same PC as coordinator, 127.0.0.1 is fine.
     coordinator_ip = "127.0.0.1"
     addr = f"tcp://{coordinator_ip}:5551"
-    print(f"[Plant1] Connecting to coordinator at {addr}")
+    print(f"[Plant] Connecting to coordinator at {addr}")
     sock.connect(addr)
 
-    ## Simulation parameters
-    # Carrier frequency
-    carrier_freq = 1e4 # in kHz
-    # Overall sampling time
-    sampling_time = 1/carrier_freq
-    # Grid frequency in Hz
+    # --- base simulation parameters (must match controllers) ---
+    carrier_freq = 1e4
+    sampling_time = 1.0 / carrier_freq
     f_grid = 50.0
-    # Grid / DC Source Voltage
-    V_rms_req = 230.0  # RMS voltage in V
-    V_dc = V_rms_req * math.sqrt(2)  # V
+    V_rms_req = 230.0
+    V_dc0 = V_rms_req * math.sqrt(2)
 
     # Grid + DC Link parameters
-    Lg=10e-3
-    Rg=10.0
-    Cdc=5e-3
-    griddclink = GridDCLink(sampling_time, Rg, Lg, Cdc, V_dc, f_grid, per_unit=False)
+    Lg = 10e-3
+    Rg = 10.0
+    Cdc = 5e-3
+    griddclink = GridDCLink(sampling_time, Rg, Lg, Cdc, V_dc0, f_grid, per_unit=False)
 
     # Load parameters
     f_load = f_grid
-    Ll=5e-3
-    Rl=5.0
-    back_emf_peak = 0
+    Ll = 5e-3
+    Rl = 5.0
+    back_emf_peak = 0.0
     load = Load(sampling_time, Rl, Ll, back_emf_peak, f_load, per_unit=False)
 
-    # Local state
-    x1 = (0.0, V_dc)  # i_g, v_dc
-    x2 = 0.0  # i_l
-    Ts = 1e-4   # just to have it locally
+    # PWM blocks (full bridge, bipolar) for grid converter and load converter
+    pwm_grid = PWM(carrier_freq, sampling_time, V_dc0, tech_type="FB", per_unit=False, modulation="bipolar")
+    pwm_load = PWM(carrier_freq, sampling_time, V_dc0, tech_type="FB", per_unit=False, modulation="bipolar")
 
-    print("[Plant1] Started.")
+    # Local state
+    x1 = (0.0, V_dc0)  # (i_g, v_dc)
+    x2 = 0.0           # i_l
+
+    print("[Plant] Started.")
     while True:
-        # 1) Send a "ready" ping to coordinator
+        # 1) Send ready ping
         sock.send_json({"hello_from": "plant"})
 
         # 2) Receive job from coordinator
         msg = sock.recv_json()
-
         if msg.get("msg_type") == "shutdown":
             print("[Plant] Shutting down.")
             break
 
-        step = msg["step"]
-        outer_step = msg["outer_step"]
-        Ts = msg["Ts"]
-        M = msg["M"]
-
+        step = int(msg["step"])
+        outer_step = int(msg["outer_step"])
+        Ts = float(msg["Ts"])
+        M = int(msg["M"])
         payload = msg["payload"]
-        u1 = payload["u1"]           # local input
-        u2 = payload["u2"]           # neighbor state, e.g. {"i_l": ...}
+        u1 = float(payload["u1"])   # grid-side modulation input in [-1,1]
+        u2 = float(payload["u2"])   # load-side modulation input in [-1,1]
 
-        x1_next = griddclink.step_euler(x1, x2, u1, step*Ts, Ts)
-        x2_next = load.step_euler(x2, u2, step*Ts, Ts)
-        x1 = x1_next
-        x2 = x2_next
+        t0 = step * Ts
+
+        # Update PWM DC-link value to the *current* v_dc
+        pwm_grid.Vdc = float(x1[1])
+        pwm_load.Vdc = float(x1[1])
+
+        # Synthesize switching waveforms over this control step Ts
+        v1_seq, dt_sub, s1_seq, gates1 = pwm_grid.synthesize_over_interval(u1, t0, Ts=Ts, return_gates=True)
+        v2_seq, dt_sub2, s2_seq, gates2 = pwm_load.synthesize_over_interval(u2, t0, Ts=Ts, return_gates=True)
+        # ensure dt match (they should, if settings identical)
+        if abs(dt_sub2 - dt_sub) > 1e-15:
+            # resample to the smaller dt by re-synthesizing; simplest is re-run with same min_step_samples
+            v2_seq, dt_sub, s2_seq, gates2 = pwm_load.synthesize_over_interval(
+                u2, t0, Ts=Ts, min_carrier_samples=20, min_step_samples=max(200, len(v1_seq)), return_gates=True
+            )
+
+        # Integrate the coupled plant using substeps
+        i_g, v_dc = x1
+        i_l = x2
+        t = t0
+        for k in range(len(v1_seq)):
+            i_g, v_dc = griddclink.step_euler((i_g, v_dc), i_l, v1_seq[k], t, dt_sub)
+            i_l = load.step_euler(i_l, v2_seq[k], t, dt_sub)
+            t += dt_sub
+
+        x1 = (float(i_g), float(v_dc))
+        x2 = float(i_l)
+
+        # Provide last switching states for plotting (sampled at end of Ts)
+        s1_last = int(s1_seq[-1]) if s1_seq else 0
+        s2_last = int(s2_seq[-1]) if s2_seq else 0
+
+        gates1_last = {k: int(v[-1]) for k, v in (gates1 or {}).items()}
+        gates2_last = {k: int(v[-1]) for k, v in (gates2 or {}).items()}
 
         reply_payload = {
-            "x1_next": {
-                "i_g": x1[0],
-                "v_dc": x1[1],
+            "x1_next": {"i_g": x1[0], "v_dc": x1[1]},
+            "x2_next": {"i_l": x2},
+            "switching": {
+                "s1": s1_last,
+                "s2": s2_last,
+                "gates1": gates1_last,
+                "gates2": gates2_last,
             },
-            "x2_next": {
-                "i_l": x2,
-            }
         }
         reply = make_envelope(
             msg_type="plant_to_coord",
@@ -96,7 +124,7 @@ def main():
         print("[P] Sending reply to coordinator.")
         sock.send_json(reply)
 
-        # 4) wait for ACK to complete REQ/REP cycle
+        # 4) Receive ACK to complete REQ cycle
         ack = sock.recv_json()
         print("[Plant] Received ACK from coordinator:", ack)
 

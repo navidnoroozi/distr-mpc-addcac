@@ -37,7 +37,7 @@ def main():
     P_req = 3e3  # Active power in W
     Q_req = 0.0    # Reactive power in VAR
     powerCurrentHandler = RequiredPowerCurrentHandler(P_req, Q_req, V_rms_req)
-    i_ref_peak, _ = powerCurrentHandler.calculateCurrentMagnitudeAndPhase()
+    i_ref_peak, phi_req = powerCurrentHandler.calculateCurrentMagnitudeAndPhase()
 
     # Load parameters
     Ll=5e-3
@@ -46,7 +46,7 @@ def main():
     load = Load(sampling_time, Rl, Ll, back_emf_peak, f_load, per_unit=False)
     
     # PWM and Current Reference objects
-    referenceTrajectory = CurrentReference(i_ref_peak, f_load, per_unit=False)
+    referenceTrajectory = CurrentReference(i_ref_peak, f_load, phi=phi_req, use_cos=True, per_unit=False)
     pwm_load = PWM(carrier_freq, sampling_time, V_dc, tech_type = 'FB', per_unit=False)
     
     # stage cost
@@ -101,7 +101,7 @@ def main():
         if u_prev is None:
             u_prev = np.zeros(N)
 
-        current_time = step * M * Ts
+        current_time = payload.get("t_sim", step * Ts)
         # Solve MPC (averaged model inside)
         print("[C2] Starting local optimization ...")
         u_opt, J2 = solver.solveMPC(pwm_load, load, referenceTrajectory, 
