@@ -17,15 +17,16 @@ class Load:
             return self.V_emf * math.cos(2.0*math.pi*self.f_emf*t)
         
 
-    def step_euler(self, i_l, v_inv_ctrl, t, dt):
+    def step_euler(self, i_l, v_dc, u_inv, t, dt):
         """
         Discrete-time model for Subsystem 2: x2 = [i_l].
 
         Euler of some continuous dynamics with coupling to x1.
-            di_l/dt = di_l/dt = (-Rl * i_l + v_inv_ctrl - e_l) / Ll
+            di_l/dt = (-Rl * i_l + v_inv_ctrl - e_l) / Ll
         """
+        v_inv_ctrl = u_inv * v_dc   # v_inv_ctrl is the load-side inverter voltage control input
         di_l = (- self.Rl * i_l + v_inv_ctrl - self._bemf(t)) / self.Ll
-        return i_l + dt * di_l
+        return float(i_l + dt * di_l)
 
     def calculateLoadDynamicsSubsteps(self, i_a_0, v_subseq, t_0, dt_sub):
         """

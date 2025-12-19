@@ -25,14 +25,14 @@ def main():
 
     # Grid + DC Link parameters
     Lg = 10e-3
-    Rg = 10.0
+    Rg = 1.0
     Cdc = 5e-3
     griddclink = GridDCLink(sampling_time, Rg, Lg, Cdc, V_dc0, f_grid, per_unit=False)
 
     # Load parameters
     f_load = f_grid
-    Ll = 5e-3
-    Rl = 5.0
+    Ll = 10e-3
+    Rl = 1.0
     back_emf_peak = 0.0
     load = Load(sampling_time, Rl, Ll, back_emf_peak, f_load, per_unit=False)
 
@@ -83,10 +83,8 @@ def main():
         i_g, v_dc = x1
         i_l = x2
         t = t0
-        for k in range(len(v1_seq)):
-            i_g, v_dc = griddclink.step_euler((i_g, v_dc), i_l, v1_seq[k], t, dt_sub)
-            i_l = load.step_euler(i_l, v2_seq[k], t, dt_sub)
-            t += dt_sub
+        i_g, v_dc = griddclink.step_euler((i_g, v_dc), i_l, u1, u2, t, dt_sub)
+        i_l = load.step_euler(i_l, v_dc, u2, t, dt_sub)
 
         x1 = (float(i_g), float(v_dc))
         x2 = float(i_l)

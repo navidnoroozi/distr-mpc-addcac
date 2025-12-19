@@ -5,9 +5,6 @@ import matplotlib.pyplot as plt
 from comm_schema import make_envelope
 from acdcac.fsclf import FiniteStepLyapunov
 
-def _current_ref(t: float, I_peak: float, f: float, phase_rad: float=0.0) -> float:
-    return I_peak * math.cos(2.0 * math.pi * f * t - phase_rad)
-
 def main():
     context = zmq.Context()
 
@@ -26,25 +23,15 @@ def main():
     # ------------------------------------------------------------
     sim_id = "acdcac_demo_001"
     Ts = 1e-4
-    M = 3
-    N = M  # as requested: control horizon equals finite-step M
-    sim_time = 0.1  # total simulation time [s]
+    M = 1  # number of inner steps per outer step
+    N = 5  # control horizon equals finite-step, N = M for fsCLF-MPC
+    sim_time = 500e-4  # total simulation time [s]
     total_steps = int(sim_time / Ts)
     outer_steps = total_steps // M
 
     # Electrical scenario (for plotting refs)
-    f_grid = 50.0
-    f_load = 50.0
     V_rms_req = 230.0
     V_dc_ref = V_rms_req * math.sqrt(2)
-
-    # Power requirement -> current magnitude and phase (P,Q at unity PF -> phase=0)
-    P_req = 3e3
-    Q_req = 0.0
-    S = math.sqrt(P_req**2 + Q_req**2)
-    I_rms = S / V_rms_req
-    I_peak = math.sqrt(2.0) * I_rms
-    phase = math.atan2(Q_req, P_req) if P_req != 0 else 0.0
 
     # Global state x = (i_g, v_dc, i_l)
     i_g, v_dc, i_l = 0.0, V_dc_ref, 0.0
@@ -55,6 +42,7 @@ def main():
 
     # Initial neighbor trajectories (length N)
     i_l_bar = [i_l] * N
+    u2_bar  = [0.0] * N
     x1_bar = [{"i_g": i_g, "v_dc": v_dc}] * N
 
     # ------------------------------------------------------------
@@ -65,10 +53,10 @@ def main():
     e_ig_log, e_il_log, e_vdc_log = [], [], []
     u1_log, u2_log = [], []
 
-    s1_log, s2_log = [], []
-    # gate signals per leg (optional, sampled at end of Ts)
-    g1_Sa_p, g1_Sa_n, g1_Sb_p, g1_Sb_n = [], [], [], []
-    g2_Sa_p, g2_Sa_n, g2_Sb_p, g2_Sb_n = [], [], [], []
+    # s1_log, s2_log = [], []
+    # # gate signals per leg (optional, sampled at end of Ts)
+    # g1_Sa_p, g1_Sa_n, g1_Sb_p, g1_Sb_n = [], [], [], []
+    # g2_Sa_p, g2_Sa_n, g2_Sb_p, g2_Sb_n = [], [], [], []
 
     # Costs (per OUTER step, i.e. per optimization)
     t_outer_log, J1_log, J2_log = [], [], []
@@ -89,7 +77,7 @@ def main():
         payload_c1 = {
             "state": {"i_g": i_g, "v_dc": v_dc, "i_l": i_l},
             "horizon_N": N,
-            "neighbor_prediction": {"i_l_bar": i_l_bar},
+            "neighbor_prediction": {"x2_bar": i_l_bar, "u2_bar": u2_bar},
             "fsclf": {"V0": float(V0), "alpha": 0.9},
             "t_sim": t_sim,
         }
@@ -111,6 +99,7 @@ def main():
         reply1 = sock_c1.recv_json()
         u1_seq = reply1["payload"]["u_seq"]
         x1_pred = reply1["payload"]["x1_pred"]
+        i_g_ref = reply1["payload"]["i_g_ref"]
         J1 = float(reply1["payload"].get("local_cost", float("nan")))
 
         # complete the REP cycle with an ACK
@@ -160,8 +149,11 @@ def main():
         reply2 = sock_c2.recv_json()
         u2_seq = reply2["payload"]["u_seq"]
         i_l_pred = reply2["payload"]["i_l_pred"]
+        i_l_ref = reply2["payload"]["i_l_ref"]
         J2 = float(reply2["payload"].get("local_cost", float("nan")))
+        # Update neighbor predictions FOR NEXT outer step
         i_l_bar = i_l_pred
+        u2_bar = u2_seq
 
         # complete REP cycle with ACK
         ack_c2 = {
@@ -214,11 +206,11 @@ def main():
             v_dc = float(rep_p["payload"]["x1_next"]["v_dc"])
             i_l = float(rep_p["payload"]["x2_next"]["i_l"])
 
-            sw = rep_p["payload"].get("switching", {})
-            s1 = int(sw.get("s1", 0))
-            s2 = int(sw.get("s2", 0))
-            g1 = sw.get("gates1", {}) or {}
-            g2 = sw.get("gates2", {}) or {}
+            # sw = rep_p["payload"].get("switching", {})
+            # s1 = int(sw.get("s1", 0))
+            # s2 = int(sw.get("s2", 0))
+            # g1 = sw.get("gates1", {}) or {}
+            # g2 = sw.get("gates2", {}) or {}
 
             # send ACK to complete REP cycle
             ack_p = {
@@ -232,8 +224,6 @@ def main():
             sock_p.send_json(ack_p)
 
             # references + errors at *this* time stamp
-            i_g_ref = _current_ref(t_sim, I_peak, f_grid, phase)
-            i_l_ref = _current_ref(t_sim, I_peak, f_load, phase)
             vdc_ref = V_dc_ref
 
             t_log.append(t_sim)
@@ -241,30 +231,33 @@ def main():
             v_dc_log.append(v_dc)
             i_l_log.append(i_l)
 
-            i_g_ref_log.append(i_g_ref)
-            i_l_ref_log.append(i_l_ref)
+            # references + errors at *this* time stamp
+            i_g_ref_log.append(i_g_ref[m])
+            i_l_ref_log.append(i_l_ref[m])
             v_dc_ref_log.append(vdc_ref)
 
-            e_ig_log.append(i_g_ref - i_g)
-            e_il_log.append(i_l_ref - i_l)
+            e_ig_log.append(i_g_ref[m] - i_g)
+            e_il_log.append(i_l_ref[m] - i_l)
             e_vdc_log.append(vdc_ref - v_dc)
 
+            # control inputs
             u1_log.append(u1)
             u2_log.append(u2)
+            
+            # # switching + gate signals
+            # s1_log.append(s1)
+            # s2_log.append(s2)
 
-            s1_log.append(s1)
-            s2_log.append(s2)
+            # # gate traces (full-bridge) if present
+            # g1_Sa_p.append(int(g1.get("Sa_p", 0)))
+            # g1_Sa_n.append(int(g1.get("Sa_n", 0)))
+            # g1_Sb_p.append(int(g1.get("Sb_p", 0)))
+            # g1_Sb_n.append(int(g1.get("Sb_n", 0)))
 
-            # gate traces (full-bridge) if present
-            g1_Sa_p.append(int(g1.get("Sa_p", 0)))
-            g1_Sa_n.append(int(g1.get("Sa_n", 0)))
-            g1_Sb_p.append(int(g1.get("Sb_p", 0)))
-            g1_Sb_n.append(int(g1.get("Sb_n", 0)))
-
-            g2_Sa_p.append(int(g2.get("Sa_p", 0)))
-            g2_Sa_n.append(int(g2.get("Sa_n", 0)))
-            g2_Sb_p.append(int(g2.get("Sb_p", 0)))
-            g2_Sb_n.append(int(g2.get("Sb_n", 0)))
+            # g2_Sa_p.append(int(g2.get("Sa_p", 0)))
+            # g2_Sa_n.append(int(g2.get("Sa_n", 0)))
+            # g2_Sb_p.append(int(g2.get("Sb_p", 0)))
+            # g2_Sb_n.append(int(g2.get("Sb_n", 0)))
 
             # increment time
             step += 1
@@ -344,33 +337,33 @@ def main():
         plt.xlabel("Time [s]"); plt.ylabel("u [-]")
         plt.grid(True); plt.legend()
 
-        # Switching (line states) + gate samples (end-of-step)
-        plt.figure()
-        plt.title("Switching signals (sampled at end of Ts)")
-        plt.step(t_log, s1_log, where="post", label="s_1 (grid FB line state)")
-        plt.step(t_log, s2_log, where="post", label="s_2 (load FB line state)")
-        plt.xlabel("Time [s]"); plt.ylabel("s in {+1,-1}")
-        plt.grid(True); plt.legend()
+        # # Switching (line states) + gate samples (end-of-step)
+        # plt.figure()
+        # plt.title("Switching signals (sampled at end of Ts)")
+        # plt.step(t_log, s1_log, where="post", label="s_1 (grid FB line state)")
+        # plt.step(t_log, s2_log, where="post", label="s_2 (load FB line state)")
+        # plt.xlabel("Time [s]"); plt.ylabel("s in {+1,-1}")
+        # plt.grid(True); plt.legend()
 
-        plt.figure()
-        plt.title("Gate signals (sampled at end of Ts) - Converter 1 (grid)")
-        plt.step(t_log, g1_Sa_p, where="post", label="Sa_p")
-        plt.step(t_log, g1_Sa_n, where="post", label="Sa_n")
-        plt.step(t_log, g1_Sb_p, where="post", label="Sb_p")
-        plt.step(t_log, g1_Sb_n, where="post", label="Sb_n")
-        plt.xlabel("Time [s]"); plt.ylabel("Gate")
-        plt.ylim(-0.2, 1.2)
-        plt.grid(True); plt.legend()
+        # plt.figure()
+        # plt.title("Gate signals (sampled at end of Ts) - Converter 1 (grid)")
+        # plt.step(t_log, g1_Sa_p, where="post", label="Sa_p")
+        # plt.step(t_log, g1_Sa_n, where="post", label="Sa_n")
+        # plt.step(t_log, g1_Sb_p, where="post", label="Sb_p")
+        # plt.step(t_log, g1_Sb_n, where="post", label="Sb_n")
+        # plt.xlabel("Time [s]"); plt.ylabel("Gate")
+        # plt.ylim(-0.2, 1.2)
+        # plt.grid(True); plt.legend()
 
-        plt.figure()
-        plt.title("Gate signals (sampled at end of Ts) - Converter 2 (load)")
-        plt.step(t_log, g2_Sa_p, where="post", label="Sa_p")
-        plt.step(t_log, g2_Sa_n, where="post", label="Sa_n")
-        plt.step(t_log, g2_Sb_p, where="post", label="Sb_p")
-        plt.step(t_log, g2_Sb_n, where="post", label="Sb_n")
-        plt.xlabel("Time [s]"); plt.ylabel("Gate")
-        plt.ylim(-0.2, 1.2)
-        plt.grid(True); plt.legend()
+        # plt.figure()
+        # plt.title("Gate signals (sampled at end of Ts) - Converter 2 (load)")
+        # plt.step(t_log, g2_Sa_p, where="post", label="Sa_p")
+        # plt.step(t_log, g2_Sa_n, where="post", label="Sa_n")
+        # plt.step(t_log, g2_Sb_p, where="post", label="Sb_p")
+        # plt.step(t_log, g2_Sb_n, where="post", label="Sb_n")
+        # plt.xlabel("Time [s]"); plt.ylabel("Gate")
+        # plt.ylim(-0.2, 1.2)
+        # plt.grid(True); plt.legend()
 
         # Costs (per optimization / outer step)
         if t_outer_log:

@@ -18,20 +18,20 @@ class GridDCLink:
             return self.V_g * math.cos(2.0*math.pi*self.f_g*t)
         
 
-    def step_euler(self, x_g, x_l, v_gr_ctrl, t, dt):
+    def step_euler(self, x_g, x_l, u_gr, u_inv, t, dt):
         """
         Discrete-time model for Subsystem 1: x1 = [i_g, v_dc].
 
         Euler of some continuous dynamics with coupling to x2.
             di_g/dt = (-Rg * i_g + v_g - v_gr_ctrl) / Lg
-            dv_dc/dt = (i_g - i_l) / Cdc
+            dv_dc/dt = (u_gr*i_g - u_inv*i_l) / Cdc
         """
         i_g, v_dc = x_g
         i_l = x_l
-
+        v_gr_ctrl = u_gr * v_dc # v_gr_ctrl is the grid-side inverter voltage control input
         di_g = (- self.Rg * i_g - v_gr_ctrl + self._vg(t)) / self.Lg
-        dv_dc = (i_g - i_l) / self.Cdc
-        return i_g + dt * di_g, v_dc + dt * dv_dc
+        dv_dc = (u_gr*i_g - u_inv*i_l) / self.Cdc
+        return float(i_g + dt * di_g), float(v_dc + dt * dv_dc)
 
     def calculateLoadDynamicsSubsteps(self, i_a_0, v_subseq, t_0, dt_sub):
         """

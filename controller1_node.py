@@ -41,7 +41,7 @@ def main():
 
     # Grid + DC Link parameters
     Lg=10e-3
-    Rg=10.0
+    Rg=1.0
     Cdc=5e-3
     griddclink = GridDCLink(sampling_time, Rg, Lg, Cdc, V_dc, f_grid, per_unit=False)
     
@@ -54,7 +54,6 @@ def main():
         return (i_g - i_g_ref)**2 + (v_dc - V_dc_ref)**2
     
     # setup MPC solver
-    # fsclf = FiniteStepLyapunov(x_eq=[0.0, 400.0, 0.0])
     cost_func = CostFunction(stage_func, subsystem={'name': 'grid', 'V_dc_ref': V_dc})
     solver = MPCSSolver(cost_func)
 
@@ -83,10 +82,13 @@ def main():
 
         x1 = (payload["state"]["i_g"], payload["state"]["v_dc"])
         i_l = payload["state"]["i_l"]
-        i_l_bar = np.array(payload["neighbor_prediction"]["i_l_bar"], dtype=float)
+        i_l_bar = np.array(payload["neighbor_prediction"]["x2_bar"], dtype=float)
+        u2_bar = np.array(payload["neighbor_prediction"]["u2_bar"], dtype=float)
+        current_time = payload.get("t_sim", step * Ts)
         V0 = payload["fsclf"]["V0"]
         N = payload["horizon_N"]
-
+        xNbar = [(float(i_l_bar[k]),float(u2_bar[k])) for k in range(N)]  # x2_bar for grid subsystem
+        # Debug prints
         print(f"[C1] step={step}, outer_step={outer_step}, Ts={Ts}, M={M}, N={N}")
         print(f"[C1] x1={x1}, i_l={i_l}, V0={V0}")
         print(f"[C1] i_l_bar={i_l_bar}")
@@ -97,31 +99,33 @@ def main():
         if u_prev is None:
             u_prev = np.zeros(N)
 
-        current_time = payload.get("t_sim", step * Ts)
+        
         # Solve MPC (averaged model inside)
         print("[C1] Starting local optimization ...")
         u_opt, J1 = solver.solveMPC(pwm_grid, griddclink, referenceTrajectory, 
-                                   t_0=current_time, x_0=x1, x_N_bar=i_l_bar, cont_horizon=N, u0=u_prev, subsystem='grid')
-
-
-        _, x1_pred, i_g_ref = cost_func.calculateCostFuncGrid(x1, i_l_bar, current_time, u_prev, N, 
-                                                           u_opt, pwm_grid, griddclink, referenceTrajectory)
+                                   t_0=current_time, x_0=x1, x_N_bar=xNbar, cont_horizon=N, u0=u_prev, subsystem='grid')
+        u_seq = u_opt.tolist()
+        _, x1_pred, i_g_ref_raw = cost_func.calculateCostFuncGrid(x1, xNbar, current_time, u_prev, N, 
+                                                           u_seq, pwm_grid, griddclink, referenceTrajectory)
         i_g_0, v_dc_0 = x1
-        i_g_pre, v_dc_pre = x1_pred
-        i_g_ref_0 = referenceTrajectory.generateRefTrajectory(current_time)[0]
+        i_g_ref = [float(val) for val in i_g_ref_raw[:-1]]
+        i_g_pre_raw, v_dc_pre_raw = x1_pred
+        i_g_pre = [float(val) for val in i_g_pre_raw[:-1]]
+        v_dc_pre = [float(val) for val in v_dc_pre_raw[:-1]]
+        i_g_ref_0 = i_g_ref[0]
         V0_sub = stage_func(i_g_0, i_g_ref_0, v_dc_0, V_dc)
-        V_M_sub = stage_func(i_g_pre[-1], i_g_ref[-1], v_dc_pre[-1], V_dc)
-        u_prev = u_opt
+        V_M_sub = stage_func(float(i_g_pre_raw[-1]), float(i_g_ref_raw[-1]), float(v_dc_pre_raw[-1]), V_dc)
+        u_prev = u_seq
 
         print(f"[C1] Local cost J1={J1}, V0_sub={V0_sub}, V_M_sub={V_M_sub}")
 
         reply_payload = {
             "status": "ok",
             "local_cost": float(J1),
-            "u_seq": u_opt.tolist(),
-            "x1_pred": [
-                {"i_g": float(xx[0]), "v_dc": float(xx[1])} for xx in x1_pred
-            ],
+            "u_seq": u_seq,
+            "x1_pred": 
+                {"i_g": i_g_pre, "v_dc": v_dc_pre},
+            "i_g_ref": i_g_ref,
             "contractive": {
                 "V0_sub": float(V0_sub),
                 "V_M_sub": float(V_M_sub),

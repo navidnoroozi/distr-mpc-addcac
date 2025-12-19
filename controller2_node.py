@@ -40,8 +40,8 @@ def main():
     i_ref_peak, phi_req = powerCurrentHandler.calculateCurrentMagnitudeAndPhase()
 
     # Load parameters
-    Ll=5e-3
-    Rl=5.0
+    Ll=10e-3
+    Rl=1.0
     back_emf_peak = 0
     load = Load(sampling_time, Rl, Ll, back_emf_peak, f_load, per_unit=False)
     
@@ -54,7 +54,6 @@ def main():
         return (i_l - i_l_ref)**2
     
     # setup MPC solver
-    # fsclf = FiniteStepLyapunov(x_eq=[0.0, 400.0, 0.0])
     cost_func = CostFunction(stage_func, subsystem={'name': 'load', 'V_dc_ref': None})
     solver = MPCSSolver(cost_func)
 
@@ -84,11 +83,12 @@ def main():
         x2 = payload["state"]["i_l"]
         i_g, v_dc = (payload["state"]["i_g"], payload["state"]["v_dc"])
         x1_bar_dicts = payload["neighbor_prediction"]["x1_bar"]
-        x1_bar = [(d["i_g"], d["v_dc"]) for d in x1_bar_dicts]
+        x1_bar = (x1_bar_dicts["i_g"], x1_bar_dicts["v_dc"])
         i_g_bar, v_dc_bar = x1_bar
+        current_time = payload.get("t_sim", step * Ts)
         V0 = payload["fsclf"]["V0"]
         N = payload["horizon_N"]
-
+        # Debug prints
         print(f"[C2] step={step}, outer_step={outer_step}, Ts={Ts}, M={M}, N={N}")
         print(f"[C2] x2={x2}, i_g={i_g}, v_dc={v_dc}, V0={V0}")
         print(f"[C2] i_g_bar={i_g_bar}")
@@ -101,26 +101,28 @@ def main():
         if u_prev is None:
             u_prev = np.zeros(N)
 
-        current_time = payload.get("t_sim", step * Ts)
         # Solve MPC (averaged model inside)
         print("[C2] Starting local optimization ...")
         u_opt, J2 = solver.solveMPC(pwm_load, load, referenceTrajectory, 
                                    t_0=current_time, x_0=x2, x_N_bar=x1_bar, cont_horizon=N, u0=u_prev, subsystem='load')
-
-        _, x2_pred, i_l_ref = cost_func.calculateCostFuncLoad(x2, x1_bar, current_time, u_prev, N, 
-                                                           u_opt, pwm_load, load, referenceTrajectory)
+        u_seq = u_opt.tolist()
+        _, x2_pred, i_l_ref_raw = cost_func.calculateCostFuncLoad(x2, x1_bar, current_time, u_prev, N, 
+                                                           u_seq, pwm_load, load, referenceTrajectory)
         i_l_0 = x2
-        i_l_pre = x2_pred
-        i_l_ref_0 = referenceTrajectory.generateRefTrajectory(current_time)[0]
+        i_l_ref = [float(val) for val in i_l_ref_raw[:-1]]
+        i_l_pre_raw = x2_pred
+        i_l_pre = [float(val) for val in i_l_pre_raw[:-1]]
+        i_l_ref_0 = i_l_ref[0]
         V0_sub = stage_func(i_l_0, i_l_ref_0)
-        V_M_sub = stage_func(i_l_pre[-1], i_l_ref[-1])
-        u_prev = u_opt
+        V_M_sub = stage_func(float(i_l_pre_raw[-1]), float(i_l_ref_raw[-1]))
+        u_prev = u_seq
 
         reply_payload = {
             "status": "ok",
             "local_cost": float(J2),
-            "u_seq": u_opt.tolist(),
-            "i_l_pred": [float(xx) for xx in x2_pred],
+            "u_seq": u_seq,
+            "i_l_pred": i_l_pre,
+            "i_l_ref": i_l_ref,
             "contractive": {
                 "V0_sub": float(V0_sub),
                 "V_M_sub": float(V_M_sub),
